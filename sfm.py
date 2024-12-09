@@ -26,8 +26,15 @@ def get_init_image_ids(scene_graph: dict) -> (str, str):
     """
     max_pair = [None, None]  # dummy value
     """ YOUR CODE HERE """
-    
-
+    for image_id1, neighbors in scene_graph.items():
+        for image_id2 in neighbors:
+            if image_id1 != image_id2:  # Ensure it's a pair and not self-loop
+                match_file = os.path.join(RANSAC_MATCH_DIR, f"{image_id1}_{image_id2}.npy")
+                if os.path.exists(match_file):
+                    inliers = np.load(match_file)
+                    if inliers.shape[0] > max_inliers:
+                        max_inliers = inliers.shape[0]
+                        max_pair = [image_id1, image_id2]
 
     """ END YOUR CODE HERE """
     image_id1, image_id2 = sorted(max_pair)
@@ -78,9 +85,9 @@ def get_init_extrinsics(image_id1: str, image_id2: str, intrinsics: np.ndarray) 
 
     extrinsics2 = np.zeros(shape=[3, 4], dtype=float)
     """ YOUR CODE HERE """
-    
-
-
+    _, R, t, mask = cv2.recoverPose(essential_mtx, points2d_1, points2d_2, cameraMatrix=intrinsics)
+    extrinsics2[:3, :3] = R
+    extrinsics2[:, 3] = t.reshape(-1, 1)
     """ END YOUR CODE HERE """
     return extrinsics1, extrinsics2
 
@@ -154,9 +161,8 @@ def get_reprojection_residuals(points2d: np.ndarray, points3d: np.ndarray, intri
     """
     residuals = np.zeros(points2d.shape[0])
     """ YOUR CODE HERE """
-   
-
-
+    reprojected_points2d = project_points(points3d, intrinsics, rotation_mtx, tvec)
+    residuals = np.linalg.norm(points2d - reprojected_points2d, axis=1)
     """ END YOUR CODE HERE """
     return residuals
 
@@ -202,9 +208,19 @@ def solve_pnp(image_id: str, point2d_idxs: np.ndarray, all_points3d: np.ndarray,
         2. convert the returned rotation vector to rotation matrix using cv2.Rodrigues
         3. compute the reprojection residuals
         """
-       
-
-
+        success, rvec, tvec = cv2.solvePnP(selected_pts3d, selected_pts2d, intrinsics, None, flags=cv2.SOLVEPNP_EPNP)
+        if success:
+            rvec, _ = cv2.Rodrigues(rvec)
+            rotation_mtx = rvec
+            residuals = get_reprojection_residuals(selected_pts2d, selected_pts3d, intrinsics, rotation_mtx, tvec)
+            is_inlier = residuals < inlier_threshold
+            num_inliers = np.sum(is_inlier)
+            if num_inliers > max_num_inliers:
+                max_rotation_mtx = rotation_mtx
+                max_tvec = tvec
+                max_is_inlier = is_inlier
+                max_num_inliers = num_inliers
+                has_valid_solution = True
         """ END YOUR CODE HERE """
 
         is_inlier = residuals <= inlier_threshold
@@ -254,8 +270,7 @@ def add_points3d(image_id1: str, image_id2: str, all_extrinsic: dict, intrinsics
     triangulate between the image points for the unregistered matches for image_id1 and image_id2 to get new points3d
     new_points3d = triangulate(..., kp_idxs1=matches[:, 0], kp_idxs2=matches[:, 1], ...)
     """
-    
-
+    new_points3d = triangulate(image_id1, image_id2, matches[:, 0], matches[:, 1], all_extrinsic[image_id1], all_extrinsic[image_id2], intrinsics)
 
     """ END YOUR CODE HERE """
 
@@ -285,10 +300,16 @@ def get_next_pair(scene_graph: dict, registered_ids: list):
     """
     max_new_id, max_registered_id, max_num_inliers = None, None, 0
     """ YOUR CODE HERE """
-    
-
-
-    
+    for registered_id in registered_ids:
+        for neighbor_id in scene_graph[registered_id]:
+            if neighbor_id not in registered_ids:
+                match_file = os.path.join(RANSAC_MATCH_DIR, f"{registered_id}_{neighbor_id}.npy")
+                if os.path.exists(match_file):
+                    inliers = np.load(match_file)
+                    if inliers.shape[0] > max_num_inliers:
+                        max_num_inliers = inliers.shape[0]
+                        max_new_id = neighbor_id
+                        max_registered_id = registered_id
     """ END YOUR CODE HERE """
     return max_new_id, max_registered_id
 
